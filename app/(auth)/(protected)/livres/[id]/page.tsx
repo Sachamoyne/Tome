@@ -1,50 +1,52 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import StarRating from "@/components/star-rating";
 
 export default function LivreDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const id =
-    typeof params?.id === "string"
-      ? params.id
-      : Array.isArray(params?.id)
-      ? params.id[0]
-      : "";
+  const searchParams = useSearchParams();
+  
+  // ID du livre
+  const id = typeof params?.id === "string" ? params.id : "";
+  // ID de l'utilisateur dont on veut voir l'avis (optionnel)
+  const targetUserId = searchParams.get('uid');
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [book, setBook] = useState<any>(null);
   const [post, setPost] = useState<any>(null);
-  const [user, setUser] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [targetUserProfile, setTargetUserProfile] = useState<any>(null);
 
   const [rating, setRating] = useState(0);
   const [review, setReview] = useState("");
 
+  // Est-ce que je suis en train de regarder mon propre livre ?
+  const isMyBook = !targetUserId || (currentUser && targetUserId === currentUser.id);
+
   useEffect(() => {
-    loadPage();
-  }, [id]);
+    if (id) loadPage();
+  }, [id, targetUserId]);
 
   const loadPage = async () => {
     setLoading(true);
     setError(null);
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
+    // 1. Qui suis-je ?
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
     if (userError || !user) {
       setError("Utilisateur non connecté.");
       setLoading(false);
       return;
     }
+    setCurrentUser(user);
 
-    setUser(user);
-
+    // 2. Infos du Livre
     const { data: bookData, error: bookError } = await supabase
       .from("books")
       .select("*")
@@ -56,14 +58,23 @@ export default function LivreDetailPage() {
       setLoading(false);
       return;
     }
-
     setBook(bookData);
 
+    // 3. Déterminer quel avis charger (Moi ou l'Ami ?)
+    const userIdToFetch = targetUserId || user.id;
+
+    // Récupérer le profil de l'ami si ce n'est pas moi
+    if (userIdToFetch !== user.id) {
+        const { data: profile } = await supabase.from("profiles").select("username").eq("id", userIdToFetch).single();
+        setTargetUserProfile(profile);
+    }
+
+    // 4. Récupérer l'avis (Post)
     const { data: postData } = await supabase
       .from("posts")
       .select("*")
       .eq("book_id", id)
-      .eq("user_id", user.id)
+      .eq("user_id", userIdToFetch)
       .maybeSingle();
 
     setPost(postData || null);
@@ -74,25 +85,24 @@ export default function LivreDetailPage() {
   };
 
   const upsertPost = async (fields: any) => {
-    if (!user || !book) return;
+    if (!isMyBook) return; // Sécurité : on ne modifie pas l'avis des autres !
 
     const payload = {
-      user_id: user.id,
+      user_id: currentUser.id,
       book_id: book.id,
       book_title: book.title,
       book_author: book.author,
       book_cover_url: book.cover_url,
-      rating: fields.rating ?? rating ?? null,
-      comment: fields.comment ?? review ?? null,
+      rating: fields.rating !== undefined ? fields.rating : rating,
+      comment: fields.comment !== undefined ? fields.comment : review,
     };
 
     if (post) {
       await supabase.from("posts").update(payload).eq("id", post.id);
     } else {
-      await supabase.from("posts").insert([payload]);
+      const { data: newPost } = await supabase.from("posts").insert([payload]).select().single();
+      setPost(newPost);
     }
-
-    await loadPage();
   };
 
   const handlePublishReview = async () => {
@@ -100,106 +110,101 @@ export default function LivreDetailPage() {
     router.push("/livres");
   };
 
-  if (loading)
-    return (
-      <p className="text-center text-[var(--color-text)]/50 font-serif py-12">
-        Chargement…
-      </p>
-    );
-
-  if (error) {
-    return (
-      <div className="max-w-5xl mx-auto px-4 pt-10 text-center">
-        <p className="text-[var(--color-accent)] mb-4 font-serif">{error}</p>
-        <button
-          onClick={() => router.back()}
-          className="px-4 py-2 bg-[var(--color-accent)] text-white font-serif rounded-sm hover:opacity-90 transition-opacity"
-        >
-          Retour
-        </button>
-      </div>
-    );
-  }
+  if (loading) return (
+    <div className="flex items-center justify-center min-h-[50vh]">
+      <p className="text-[var(--color-text)]/50 font-serif animate-pulse">Chargement...</p>
+    </div>
+  );
 
   return (
-    <div className="max-w-5xl mx-auto px-4 pt-10">
+    <div className="max-w-4xl mx-auto px-6 py-10 pb-20">
       <button
         onClick={() => router.back()}
-        className="text-[var(--color-text)]/60 hover:text-[var(--color-text)] font-serif mb-6 transition-colors"
+        className="text-[var(--color-subtle)] hover:text-[var(--color-text)] font-medium text-sm mb-8 transition-colors flex items-center gap-2"
       >
         ← Retour
       </button>
 
-      <div className="border border-[var(--color-border)] bg-white/60 p-8 mb-8">
-        <div className="flex gap-8">
-          {book.cover_url && (
-            <img
-              src={book.cover_url}
-              alt={book.title}
-              className="w-40 h-auto object-cover border border-[var(--color-border)] flex-shrink-0"
-            />
-          )}
-
-          <div className="flex-1">
-            <h1 className="text-3xl font-serif font-semibold text-[var(--color-text)] mb-2">
-              {book.title}
-            </h1>
-            <p className="text-lg font-serif text-[var(--color-text)]/70 mb-6">
-              {book.author}
-            </p>
-
-            {book.description && (
-              <p className="font-serif text-base text-[var(--color-text)]/80 leading-relaxed">
-                {book.description}
-              </p>
-            )}
+      {/* HEADER LIVRE */}
+      <div className="flex flex-col md:flex-row gap-8 mb-12">
+        {book.cover_url && (
+          <div className="w-48 flex-shrink-0 mx-auto md:mx-0 shadow-lg rotate-1">
+            <img src={book.cover_url} alt={book.title} className="w-full h-auto object-cover border border-[var(--color-border)] bg-[#EAE5DC]" />
           </div>
+        )}
+        <div className="flex-1 text-center md:text-left">
+          <h1 className="text-4xl md:text-5xl font-serif font-bold text-[var(--color-text)] mb-3 leading-tight">{book.title}</h1>
+          <p className="text-xl font-serif text-[var(--color-subtle)] mb-6">{book.author}</p>
+          {book.description && (
+            <div className="prose prose-stone max-w-none">
+              <p className="font-sans text-base text-[var(--color-text)]/80 leading-relaxed text-justify md:text-left line-clamp-[8]">
+                {book.description.replace(/<[^>]*>?/gm, '')}
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="space-y-8">
-        <div className="border border-[var(--color-border)] bg-white/60 p-6">
-          <h2 className="font-serif font-semibold text-lg text-[var(--color-text)] mb-4">
-            Note
-          </h2>
-          <div className="flex items-center gap-4">
-            <input
-              type="range"
-              min="1"
-              max="5"
-              value={rating}
-              onChange={(e) => setRating(Number(e.target.value))}
-              className="flex-1"
-            />
-            <span className="font-serif text-lg text-[var(--color-text)] w-12 text-center">
-              {rating}/5
+      <div className="grid md:grid-cols-2 gap-8">
+        
+        {/* BLOC NOTE */}
+        <div className="border border-[var(--color-border)] bg-white p-6 rounded-lg shadow-sm card-shadow">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="font-serif font-bold text-lg text-[var(--color-text)]">
+              {isMyBook ? "Ma note" : `Note de ${targetUserProfile?.username || "l'ami"}`}
+            </h2>
+            <span className={`text-sm font-bold px-3 py-1 rounded-full ${rating > 0 ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-muted)] text-[var(--color-subtle)]'}`}>
+              {rating > 0 ? `${rating}/5` : "-"}
             </span>
-            <button
-              onClick={() => upsertPost({ rating })}
-              className="px-4 py-2 bg-[var(--color-accent)] text-white font-serif rounded-sm hover:opacity-90 transition-opacity"
-            >
-              Enregistrer
-            </button>
+          </div>
+          <div className="flex flex-col items-center justify-center py-2 gap-3">
+            <StarRating 
+              rating={rating} 
+              readOnly={!isMyBook} // Bloqué si ce n'est pas moi !
+              onChange={(newRating) => {
+                  if(isMyBook) {
+                    setRating(newRating);
+                    upsertPost({ rating: newRating });
+                  }
+              }} 
+            />
+            {isMyBook && <p className="text-xs text-[var(--color-subtle)] text-center mt-2">Double-cliquez pour une demi-étoile.</p>}
           </div>
         </div>
 
-        <div className="border border-[var(--color-border)] bg-white/60 p-6">
-          <h2 className="font-serif font-semibold text-lg text-[var(--color-text)] mb-4">
-            Avis
+        {/* BLOC AVIS */}
+        <div className="border border-[var(--color-border)] bg-white p-6 rounded-lg shadow-sm card-shadow flex flex-col">
+          <h2 className="font-serif font-bold text-lg text-[var(--color-text)] mb-4">
+            {isMyBook ? "Mon avis" : `Avis de ${targetUserProfile?.username || "l'ami"}`}
           </h2>
-          <textarea
-            className="w-full px-4 py-3 border border-[var(--color-border)] bg-white text-[var(--color-text)] font-serif rounded-sm focus:outline-none focus:border-[var(--color-accent)] resize-none"
-            rows={5}
-            value={review}
-            onChange={(e) => setReview(e.target.value)}
-            placeholder="Partagez votre avis sur ce livre..."
-          />
-          <button
-            onClick={handlePublishReview}
-            className="mt-4 px-4 py-2 bg-[var(--color-accent)] text-white font-serif rounded-sm hover:opacity-90 transition-opacity"
-          >
-            Publier l'avis
-          </button>
+          
+          {isMyBook ? (
+            // MODE ÉDITION (MOI)
+            <>
+              <textarea
+                className="flex-1 w-full px-4 py-3 border border-[var(--color-muted)] bg-[var(--color-bg)]/30 text-[var(--color-text)] rounded-md focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] resize-none text-sm leading-relaxed"
+                rows={5}
+                value={review}
+                onChange={(e) => setReview(e.target.value)}
+                placeholder="Qu'avez-vous pensé de ce livre ?"
+              />
+              <button
+                onClick={handlePublishReview}
+                className="mt-4 w-full px-4 py-3 bg-[var(--color-text)] text-white font-medium rounded-md hover:bg-[var(--color-primary)] transition-all shadow-sm"
+              >
+                Enregistrer l'avis
+              </button>
+            </>
+          ) : (
+            // MODE LECTURE (AMI)
+            <div className="flex-1 p-4 bg-[var(--color-bg)]/20 rounded-md border border-[var(--color-muted)]/50 min-h-[150px]">
+              {review ? (
+                <p className="text-sm text-[var(--color-text)] leading-relaxed italic">"{review}"</p>
+              ) : (
+                <p className="text-sm text-[var(--color-subtle)] italic text-center mt-10">Aucun avis rédigé pour le moment.</p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

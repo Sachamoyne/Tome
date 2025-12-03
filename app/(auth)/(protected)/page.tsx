@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { Star, Loader2, BookOpen, Clock } from "lucide-react";
 
 interface PostRow {
   id: string;
@@ -19,187 +20,179 @@ interface PostRow {
 interface ProfileRow {
   id: string;
   username: string | null;
+  avatar_url: string | null;
+}
+
+interface FeedItem extends PostRow {
+  username: string | null;
+  avatar_url: string | null;
 }
 
 export default function HomePage() {
-  const [posts, setPosts] = useState<(PostRow & { username: string | null })[]>(
-    []
-  );
+  const [posts, setPosts] = useState<FeedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const formatter = useMemo(
-    () =>
-      new Intl.DateTimeFormat("fr-FR", {
-        dateStyle: "long",
-        timeStyle: undefined,
-      }),
-    []
-  );
-
   useEffect(() => {
-    const fetchFeed = async () => {
-      setLoading(true);
-      setError(null);
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        setError("Utilisateur non connecté.");
-        setLoading(false);
-        return;
-      }
-
-      const { data: follows } = await supabase
-        .from("follow")
-        .select("followed_id")
-        .eq("follower_id", user.id);
-
-      const followedIds = [
-        user.id,
-        ...(follows?.map((f) => f.followed_id) ?? []),
-      ];
-
-      const { data: postsData, error: postsError } = await supabase
-        .from("posts")
-        .select("*")
-        .in("user_id", followedIds)
-        .order("created_at", { ascending: false });
-
-      if (postsError) {
-        console.error(postsError);
-        setError("Erreur lors du chargement du flux d'activité.");
-        setLoading(false);
-        return;
-      }
-
-      const postsList = postsData ?? [];
-
-      const userIds = Array.from(new Set(postsList.map((p) => p.user_id)));
-
-      const { data: profilesData } = await supabase
-        .from("profiles")
-        .select("id, username")
-        .in("id", userIds);
-
-      const profileMap: Record<string, string | null> = {};
-      profilesData?.forEach((p: ProfileRow) => {
-        profileMap[p.id] = p.username;
-      });
-
-      const combined = postsList.map((p: PostRow) => ({
-        ...p,
-        username: profileMap[p.user_id] ?? "Utilisateur",
-      }));
-
-      setPosts(combined);
-      setLoading(false);
-    };
-
     fetchFeed();
   }, []);
 
+  const fetchFeed = async () => {
+    setLoading(true);
+    setError(null);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    // 1. Amis uniquement
+    const { data: follows } = await supabase
+      .from("follow")
+      .select("followed_id")
+      .eq("follower_id", user.id);
+
+    const friendIds = follows?.map((f) => f.followed_id) ?? [];
+
+    if (friendIds.length === 0) {
+      setLoading(false);
+      return;
+    }
+
+    // 2. Posts récents
+    const { data: postsData, error: postsError } = await supabase
+      .from("posts")
+      .select("*")
+      .in("user_id", friendIds)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (postsError) {
+      setError("Erreur chargement feed.");
+      setLoading(false);
+      return;
+    }
+
+    const rawPosts = postsData ?? [];
+
+    // 3. Filtrer (Dernier post par ami)
+    const uniquePosts: PostRow[] = [];
+    const seenUsers = new Set<string>();
+
+    for (const post of rawPosts) {
+      if (!seenUsers.has(post.user_id)) {
+        seenUsers.add(post.user_id);
+        uniquePosts.push(post);
+      }
+    }
+
+    if (uniquePosts.length === 0) {
+      setLoading(false);
+      return;
+    }
+
+    // 4. Profils
+    const userIds = uniquePosts.map((p) => p.user_id);
+    const { data: profilesData } = await supabase
+      .from("profiles")
+      .select("id, username, avatar_url")
+      .in("id", userIds);
+
+    const profileMap: Record<string, ProfileRow> = {};
+    profilesData?.forEach((p: ProfileRow) => {
+      profileMap[p.id] = p;
+    });
+
+    const combined = uniquePosts.map((p) => ({
+      ...p,
+      username: profileMap[p.user_id]?.username ?? "Ami",
+      avatar_url: profileMap[p.user_id]?.avatar_url ?? null,
+    }));
+
+    setPosts(combined);
+    setLoading(false);
+  };
+
+  const timeAgo = (dateString: string) => {
+    const now = new Date();
+    const past = new Date(dateString);
+    const diffInSeconds = Math.floor((now.getTime() - past.getTime()) / 1000);
+
+    if (diffInSeconds < 60) return "à l'instant";
+    if (diffInSeconds < 3600) return `il y a ${Math.floor(diffInSeconds / 60)} min`;
+    if (diffInSeconds < 86400) return `il y a ${Math.floor(diffInSeconds / 3600)} h`;
+    return `il y a ${Math.floor(diffInSeconds / 86400)} j`;
+  };
+
   return (
-    <div className="max-w-3xl mx-auto px-8 py-16">
-      <div className="mb-12">
-        <h1 className="text-4xl font-serif font-semibold text-gallimard-foreground mb-3 tracking-tight">
-          Bienvenue sur Livrebox
-        </h1>
-        <p className="text-gallimard-foreground/60 font-serif text-lg leading-relaxed">
-          Retrouvez ici les activités récentes de vos amis.
-        </p>
+    <div className="max-w-2xl mx-auto px-4 py-10 font-sans pb-20">
+      <div className="mb-10 text-center border-b border-[var(--color-border)] pb-8">
+        <h1 className="text-4xl font-serif font-bold text-[var(--color-text)] mb-2">Tome</h1>
+        <p className="text-[var(--color-subtle)]">La dernière lecture de vos amis.</p>
       </div>
 
-      <h2 className="text-2xl font-serif font-medium text-gallimard-foreground mb-8 border-b border-gallimard-border pb-3">
-        Activité de vos amis
-      </h2>
-
       {loading && (
-        <p className="text-center text-gallimard-foreground/50 font-serif py-12">
-          Chargement…
-        </p>
-      )}
-
-      {error && (
-        <p className="text-center text-gallimard-accent font-serif py-12">
-          {error}
-        </p>
+        <div className="flex justify-center py-20">
+          <Loader2 className="animate-spin text-[var(--color-primary)] w-8 h-8" />
+        </div>
       )}
 
       {!loading && posts.length === 0 && (
-        <p className="text-center text-gallimard-foreground/50 font-serif py-12">
-          Aucune activité récente.
-        </p>
+        <div className="text-center py-20 bg-white rounded-lg border border-[var(--color-border)] card-shadow">
+          <BookOpen className="w-12 h-12 text-[var(--color-muted)] mx-auto mb-4" />
+          <p className="text-[var(--color-text)]/60 text-lg font-serif">C'est calme ici.</p>
+          <Link href="/amis" className="mt-4 inline-block text-[var(--color-primary)] font-medium hover:underline">Trouver des amis →</Link>
+        </div>
       )}
 
-      <ul className="space-y-10">
+      <div className="space-y-8">
         {posts.map((post) => {
-          const initial = post.username?.charAt(0).toUpperCase() ?? "U";
+          const initial = post.username?.charAt(0).toUpperCase() ?? "?";
 
           return (
-            <li key={post.id} className="book-card rounded-sm p-8">
-              <div className="flex items-center justify-between mb-6 pb-6 border-b border-gallimard-border/50">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-gallimard-accent/10 border border-gallimard-accent/20 flex items-center justify-center text-gallimard-accent font-serif font-medium text-sm flex-shrink-0">
-                    {initial}
-                  </div>
-                  <p className="text-gallimard-foreground font-serif font-medium text-base">
-                    {post.username} a partagé une lecture
-                  </p>
-                </div>
-
-                <p className="text-sm text-gallimard-foreground/50 font-serif whitespace-nowrap ml-4">
-                  {formatter.format(new Date(post.created_at))}
-                </p>
-              </div>
-
-              <div className="flex gap-6 items-start">
-                {post.book_cover_url && (
-                  <img
-                    src={post.book_cover_url}
-                    alt={post.book_title}
-                    className="w-32 h-48 object-cover rounded-sm shadow-md border border-gallimard-border/50 flex-shrink-0"
-                  />
-                )}
-
-                <div className="flex-1 space-y-3">
-                  <div>
-                    <Link
-                      href={`/livres/${post.book_id}`}
-                      className="text-gallimard-foreground font-serif font-semibold text-xl hover:text-gallimard-accent transition-colors block mb-2"
-                    >
-                      {post.book_title}
-                    </Link>
-
-                    {post.book_author && (
-                      <p className="text-gallimard-foreground/60 font-serif text-base">
-                        {post.book_author}
-                      </p>
+            <article key={post.id} className="bg-white border border-[var(--color-border)] rounded-xl overflow-hidden card-shadow hover:shadow-md transition-shadow">
+              {/* Header Ami */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)]/50 bg-[var(--color-bg)]/30">
+                <Link href={`/profil-membre/${post.user_id}`} className="flex items-center gap-3 group">
+                  <div className="w-10 h-10 rounded-full border border-[var(--color-border)] p-0.5 bg-white">
+                    {post.avatar_url ? (
+                      <img src={post.avatar_url} alt={post.username || ""} className="w-full h-full object-cover rounded-full" />
+                    ) : (
+                      <div className="w-full h-full rounded-full bg-[var(--color-muted)] flex items-center justify-center text-[var(--color-text)]/50 font-bold font-serif">{initial}</div>
                     )}
                   </div>
-
-                  {post.rating && (
-                    <p className="text-gallimard-accent font-serif text-base font-medium">
-                      Note : {post.rating}/5
-                    </p>
-                  )}
-
-                  {post.comment && (
-                    <div className="mt-4 pt-4 border-t border-gallimard-border/30">
-                      <p className="text-gallimard-foreground/70 font-serif italic text-base leading-relaxed">
-                        "{post.comment}"
-                      </p>
-                    </div>
-                  )}
-                </div>
+                  <div className="flex flex-col">
+                    <span className="font-bold text-sm text-[var(--color-text)] group-hover:text-[var(--color-primary)] transition-colors">{post.username}</span>
+                    <span className="text-xs text-[var(--color-subtle)]">a partagé sa dernière lecture</span>
+                  </div>
+                </Link>
+                <div className="flex items-center gap-1 text-xs text-[var(--color-subtle)]"><Clock className="w-3 h-3" />{timeAgo(post.created_at)}</div>
               </div>
-            </li>
+
+              {/* Contenu Livre avec lien spécial UID */}
+              <Link href={`/livres/${post.book_id}?uid=${post.user_id}`} className="block group">
+                <div className="p-8 flex flex-col items-center bg-[var(--color-bg)]/10 hover:bg-[var(--color-bg)]/20 transition-colors">
+                  <div className="relative w-40 aspect-[2/3] shadow-lg transition-transform duration-300 group-hover:-translate-y-2 group-hover:shadow-xl">
+                    {post.book_cover_url ? (
+                      <img src={post.book_cover_url} alt={post.book_title} className="w-full h-full object-cover rounded-sm border border-[var(--color-border)]" />
+                    ) : (
+                      <div className="w-full h-full bg-[#EAE5DC] flex items-center justify-center border border-[var(--color-border)]"><BookOpen className="text-[var(--color-subtle)]" /></div>
+                    )}
+                    {post.rating && (
+                      <div className="absolute -bottom-3 -right-3 bg-white border border-[var(--color-border)] rounded-full px-3 py-1 shadow-sm flex items-center gap-1 z-10">
+                        <span className="font-bold text-[var(--color-text)]">{post.rating}</span>
+                        <Star className="w-3 h-3 text-[var(--color-primary)] fill-[var(--color-primary)]" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-6 text-center max-w-sm">
+                    <h2 className="text-xl font-serif font-bold text-[var(--color-text)] leading-tight group-hover:text-[var(--color-primary)] transition-colors">{post.book_title}</h2>
+                    <p className="text-sm text-[var(--color-subtle)] mt-1 font-medium">{post.book_author}</p>
+                  </div>
+                </div>
+              </Link>
+            </article>
           );
         })}
-      </ul>
+      </div>
     </div>
   );
 }
