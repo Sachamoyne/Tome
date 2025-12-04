@@ -18,6 +18,10 @@ const inter = Inter({
 export const metadata = {
   title: "Tome",
   description: "Votre journal de lecture social",
+  icons: {
+    icon: '/icon.png',
+    apple: '/apple-icon.png',
+  },
 };
 
 export default function RootLayout({
