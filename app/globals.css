@@ -1,36 +1,28 @@
- @import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-@theme {
-  /* On connecte tes variables de police définies dans layout.tsx */
-  --font-serif: var(--font-serif);
-  --font-sans: var(--font-sans);
-
-  /* Ta palette de couleurs Letterboxd */
+:root {
+  /* Ta palette Beige & Rouge "Tome" */
   --color-bg: #F8F4EC;
   --color-bg-card: #FFFFFF;
   --color-text: #1A1A1A;
   --color-primary: #A72608;
   --color-muted: #E8E3D9;
   --color-subtle: #666666;
+  --color-border: #D6D2C4;
 }
 
-/* Styles globaux */
 body {
   background-color: var(--color-bg);
   color: var(--color-text);
-  font-family: var(--font-sans);
 }
 
-h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-serif);
-}
-
-/* Utilitaires personnalisés */
+/* Utilitaires */
 .card-shadow {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
 }
 
-/* Scrollbar discrète */
 ::-webkit-scrollbar {
   width: 8px;
 }
